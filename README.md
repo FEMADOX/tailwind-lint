@@ -75,6 +75,7 @@ tailwind-lint --verbose
 - `-c, --config <path>` - Path to Tailwind config file (default: auto-discover)
 - `-a, --auto` - Auto-discover files from the resolved Tailwind config or CSS `@source` directives
 - `--fix` - Automatically fix problems that can be fixed
+- `--concurrency <number|auto>` - Worker threads for linting and fixing (default: `1`)
 - `--format <text|json>` - Output format (`text` default, `json` for machine-readable output)
 - `-v, --verbose` - Enable verbose logging for debugging
 - `-h, --help` - Show help message
@@ -220,6 +221,22 @@ module.exports = {
 	plugins: [],
 };
 ```
+
+## CPU parallelism
+
+Opt in to multiple CPU cores with `--concurrency`. It works for both linting and autofix:
+
+```bash
+tailwind-lint --auto --concurrency 4
+tailwind-lint --auto --concurrency 4 --fix
+tailwind-lint --auto --concurrency auto --fix
+```
+
+Use a positive integer to choose the number of worker threads, or `auto` to use Node.js's available CPU parallelism. The number of workers is capped by the number of discovered files. The default, `1`, runs in the main thread without starting workers.
+
+Files are discovered and assigned to their Tailwind config before workers start. Each file is processed once, with the complete fix loop handled by one worker. Workers load independent Tailwind states before any fixes begin, and results remain sorted by file path, including in JSON output.
+
+Workers add startup time and memory usage for their Tailwind states. Small projects may be faster with `--concurrency 1`; compare values on your own project before choosing a default for CI. In the JavaScript API, pass `concurrency: 4` or `concurrency: "auto"` to `lint()` from the built package.
 
 ## Autofix
 

@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-	entry: ["src/linter.ts", "src/cli.ts"],
+	entry: ["src/linter.ts", "src/cli.ts", "src/lint-worker.ts"],
 	format: "cjs",
 	platform: "node",
 	target: "node22",
