@@ -160,6 +160,106 @@ describe("packaged worker concurrency", () => {
 		}
 	});
 
+	it("preserves canonical aliases that converge to the same class across workers", async () => {
+		const files = {
+			"a.html": '<div class="p-[16px] w-[200px]"></div>\n',
+			"b.html": '<div class="p-4 top-[60px]"></div>\n',
+			"c.html": '<div class="w-50 p-[16px]"></div>\n',
+		};
+		const serial = project("v4", files);
+		const parallel = project("v4", files);
+		expect(await lint({ ...parallel, concurrency: 2 })).toEqual(
+			await lint({ ...serial, concurrency: 1 }),
+		);
+		expect(await lint({ ...parallel, concurrency: 2, fix: true })).toEqual(
+			await lint({ ...serial, concurrency: 1, fix: true }),
+		);
+		for (const name of Object.keys(files)) {
+			expect(fs.readFileSync(path.join(parallel.cwd, "src", name))).toEqual(
+				fs.readFileSync(path.join(serial.cwd, "src", name)),
+			);
+		}
+		expect(
+			fs.readFileSync(path.join(parallel.cwd, "src/b.html"), "utf8"),
+		).toContain('class="p-4 top-15"');
+	});
+
+	it("collects canonical candidates using custom workspace class attributes", async () => {
+		const options = project("v4", {
+			"a.html": '<div data-tw="w-[200px]"></div>\n',
+			"b.html": '<div data-tw="top-[60px]"></div>\n',
+		});
+		fs.mkdirSync(path.join(options.cwd, ".vscode"));
+		fs.writeFileSync(
+			path.join(options.cwd, ".vscode/settings.json"),
+			JSON.stringify({ "tailwindCSS.classAttributes": ["data-tw"] }),
+		);
+		const serial = await lint({ ...options, concurrency: 1 });
+		expect(serial.files).toHaveLength(2);
+		expect(
+			serial.files.every((file) =>
+				file.diagnostics.some(
+					(diagnostic) => diagnostic.code === "suggestCanonicalClasses",
+				),
+			),
+		).toBe(true);
+		expect(await lint({ ...options, concurrency: 2 })).toEqual(serial);
+	});
+
+	it("preserves ESM plugin options and package subpaths in packaged workers", async () => {
+		const inputs = {
+			"a.html": '<div class="custom-box block p-[16px]"></div>\n',
+			"b.html": '<div class="extra-box block w-[200px]"></div>\n',
+		};
+		const options = project("v4", inputs);
+		const plugin = path.join(
+			options.cwd,
+			"node_modules",
+			"parallel-esm-plugin",
+		);
+		fs.mkdirSync(plugin);
+		fs.writeFileSync(
+			path.join(plugin, "package.json"),
+			JSON.stringify({
+				name: "parallel-esm-plugin",
+				type: "module",
+				exports: { ".": "./index.js", "./extra": "./extra.js" },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(plugin, "index.js"),
+			'const plugin = (options = {}) => ({ handler: ({ addUtilities }) => addUtilities({ [`.${options.prefix}-box`]: { display: "block" } }) }); plugin.__isOptionsFunction = true; export default plugin;',
+		);
+		fs.writeFileSync(
+			path.join(plugin, "extra.js"),
+			'export default ({ addUtilities }) => addUtilities({ ".extra-box": { display: "block" } });',
+		);
+		fs.writeFileSync(
+			options.configPath,
+			'@import "tailwindcss";\n@plugin "parallel-esm-plugin" { prefix: custom; }\n@plugin "parallel-esm-plugin/extra";\n',
+		);
+		const serial = await lint({ ...options, concurrency: 1 });
+		expect(
+			serial.files.flatMap((file) =>
+				file.diagnostics.map((diagnostic) => diagnostic.message),
+			),
+		).toContain("'custom-box' applies the same CSS properties as 'block'.");
+		expect(await lint({ ...options, concurrency: 2 })).toEqual(serial);
+		const serialFix = await lint({ ...options, concurrency: 1, fix: true });
+		const expected = Object.keys(inputs).map((name) =>
+			fs.readFileSync(path.join(options.cwd, "src", name)),
+		);
+		for (const [name, content] of Object.entries(inputs))
+			fs.writeFileSync(path.join(options.cwd, "src", name), content);
+		expect(await lint({ ...options, concurrency: 2, fix: true })).toEqual(
+			serialFix,
+		);
+		for (const [index, name] of Object.keys(inputs).entries())
+			expect(fs.readFileSync(path.join(options.cwd, "src", name))).toEqual(
+				expected[index],
+			);
+	});
+
 	it("deduplicates overlapping patterns and reports each completion exactly once", async () => {
 		const options = project("v4", {
 			"a.html": '<div class="block flex"></div>\n',

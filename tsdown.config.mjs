@@ -8,5 +8,6 @@ export default defineConfig({
 	clean: true,
 	sourcemap: false,
 	inlineOnly: false,
+	deps: { alwaysBundle: ["@tailwindcss/language-service"] },
 	dts: true,
 });

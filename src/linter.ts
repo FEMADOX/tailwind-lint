@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import ansis from "ansis";
 import { resolveConcurrency } from "./concurrency";
-import { initializeState, processFiles } from "./file-processor";
 import { processWithWorkers, type WorkerTask } from "./worker-pool";
 import { glob } from "tinyglobby";
 import {
@@ -280,6 +279,7 @@ export async function lint({
 			)),
 		);
 	} else {
+		const { initializeState, processFiles } = await import("./file-processor");
 		let processedCount = 0;
 		for (const { target, files } of tasks) {
 			const offset = processedCount;

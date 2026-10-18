@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
+import type { CanonicalCache, CanonicalRequest } from "./canonical-cache";
 import type { LintFileResult, LintOptions } from "./types";
 import type { TailwindConfigTarget } from "./utils/config";
 
@@ -16,9 +17,14 @@ export interface WorkerInput {
 }
 
 export type WorkerMessage =
-	| { type: "ready" }
+	| { type: "ready"; canonicalRequests: CanonicalRequest[] }
+	| { type: "prepared"; caches: CanonicalCache[] }
 	| { type: "progress"; file: string }
 	| { type: "result"; files: LintFileResult[] };
+
+export type WorkerCommand =
+	| { type: "prepare"; requests: CanonicalRequest[] }
+	| { type: "start"; caches: CanonicalCache[] };
 
 export async function processWithWorkers(
 	options: Pick<LintOptions, "cwd" | "fix" | "verbose" | "onProgress">,
@@ -41,9 +47,54 @@ export async function processWithWorkers(
 	}
 
 	const workers: Worker[] = [];
+	const requests: Array<{ worker: Worker; request: CanonicalRequest }> = [];
+	const caches: CanonicalCache[] = [];
 	let ready = 0;
+	let preparing = 0;
 	let processed = 0;
 	let stopping = false;
+	const start = () => {
+		for (const worker of workers) {
+			worker.postMessage({ type: "start", caches } satisfies WorkerCommand);
+		}
+	};
+	const prepare = () => {
+		const groups = new Map<
+			string,
+			{ request: CanonicalRequest; workers: Worker[]; candidates: Set<string> }
+		>();
+		for (const { worker, request } of requests) {
+			const key = JSON.stringify([request.configPath, request.options]);
+			let group = groups.get(key);
+			if (!group) {
+				group = { request, workers: [], candidates: new Set() };
+				groups.set(key, group);
+			}
+			group.workers.push(worker);
+			for (const candidate of request.candidates)
+				group.candidates.add(candidate);
+		}
+		const assignments = new Map<Worker, CanonicalRequest[]>();
+		for (const group of groups.values()) {
+			const worker = group.workers.reduce((selected, current) =>
+				(assignments.get(current)?.length ?? 0) <
+				(assignments.get(selected)?.length ?? 0)
+					? current
+					: selected,
+			);
+			const assigned = assignments.get(worker) ?? [];
+			assigned.push({ ...group.request, candidates: [...group.candidates] });
+			assignments.set(worker, assigned);
+		}
+		preparing = assignments.size;
+		if (preparing === 0) start();
+		for (const [worker, assigned] of assignments) {
+			worker.postMessage({
+				type: "prepare",
+				requests: assigned,
+			} satisfies WorkerCommand);
+		}
+	};
 	try {
 		const results = await Promise.all(
 			workloads.map(
@@ -67,11 +118,13 @@ export async function processWithWorkers(
 						worker.on("message", (message: WorkerMessage) => {
 							if (stopping) return;
 							if (message.type === "ready") {
-								// Load every config before any worker can fix a CSS config file.
-								if (++ready === count) {
-									for (const initialized of workers)
-										initialized.postMessage("start");
-								}
+								for (const request of message.canonicalRequests)
+									requests.push({ worker, request });
+								// Prepare each config's canonical index once, before any fixes begin.
+								if (++ready === count) prepare();
+							} else if (message.type === "prepared") {
+								caches.push(...message.caches);
+								if (--preparing === 0) start();
 							} else if (message.type === "result") {
 								completed = true;
 								resolve(message.files);

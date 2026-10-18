@@ -236,7 +236,18 @@ Use a positive integer to choose the number of worker threads, or `auto` to use 
 
 Files are discovered and assigned to their Tailwind config before workers start. Each file is processed once, with the complete fix loop handled by one worker. Workers load independent Tailwind states before any fixes begin, and results remain sorted by file path, including in JSON output.
 
+For v4 canonical class suggestions, workers collect candidates through the same language-service extraction and workspace settings used by validation. Suggestions are prepared once per config and font-size setting, then shared as plain strings. Classes introduced during fixing that are absent from that lookup use Tailwind's normal implementation.
+
 Workers add startup time and memory usage for their Tailwind states. Small projects may be faster with `--concurrency 1`; compare values on your own project before choosing a default for CI. In the JavaScript API, pass `concurrency: 4` or `concurrency: "auto"` to `lint()` from the built package.
+
+To compare cold CLI runs on generated fixtures after building the project:
+
+```bash
+node scripts/benchmark-concurrency.mjs --files 80 --runs 3
+node scripts/benchmark-concurrency.mjs --files 320 --fix-lines 10 --runs 3
+```
+
+The benchmark rotates the order of 1, 2, and 4 workers, includes startup in its timing, and checks identical diagnostics and fixed file contents. `--output report.json` saves individual measurements and medians. These synthetic workloads do not predict the speedup for every project.
 
 ## Autofix
 
